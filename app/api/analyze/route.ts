@@ -1,5 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// DOMMatrix polyfill — pdf-parse(pdfjs) requires this in Node.js serverless
+if (typeof globalThis.DOMMatrix === 'undefined') {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).DOMMatrix = class DOMMatrix {
+    a=1;b=0;c=0;d=1;e=0;f=0;
+    m11=1;m12=0;m13=0;m14=0;m21=0;m22=1;m23=0;m24=0;
+    m31=0;m32=0;m33=1;m34=0;m41=0;m42=0;m43=0;m44=1;
+    is2D=true; isIdentity=true;
+    constructor(_?: string | number[]) {}
+  };
+}
+
 const SYSTEM_PROMPT = `당신은 대한민국 공정거래 전문가입니다.
 아래 계약서 또는 약관 조항을 분석하여 각 조항별로 다음 항목을 JSON 배열 형식으로 출력하십시오.
 
@@ -55,13 +67,8 @@ async function callClaude(apiKey: string, text: string): Promise<string> {
 }
 
 async function extractTextFromPDF(buffer: Buffer): Promise<string> {
-  // Vercel 서버리스 환경 DOM 폴리필
-  if (typeof globalThis.DOMMatrix === 'undefined') {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (globalThis as any).DOMMatrix = class DOMMatrix { constructor(_?: string | number[]) {} };
-  }
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const pdfParse = require('pdf-parse/lib/pdf-parse');
+  const pdfParse = require('pdf-parse');
   const data = await pdfParse(buffer);
   return data.text;
 }
