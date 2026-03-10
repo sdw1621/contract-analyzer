@@ -17,7 +17,8 @@ export async function POST(request: NextRequest) {
     } else if (fileName.endsWith('.pdf')) {
       const arrayBuffer = await file.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
-      const pdfParse = (await import('pdf-parse')).default;
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pdfParse = require('pdf-parse');
       const data = await pdfParse(buffer);
       text = data.text;
     } else {

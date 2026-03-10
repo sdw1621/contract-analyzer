@@ -55,7 +55,8 @@ async function callClaude(apiKey: string, text: string): Promise<string> {
 }
 
 async function extractTextFromPDF(buffer: Buffer): Promise<string> {
-  const pdfParse = (await import('pdf-parse')).default;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const pdfParse = require('pdf-parse');
   const data = await pdfParse(buffer);
   return data.text;
 }
