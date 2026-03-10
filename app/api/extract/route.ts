@@ -17,8 +17,13 @@ export async function POST(request: NextRequest) {
     } else if (fileName.endsWith('.pdf')) {
       const arrayBuffer = await file.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
+      // Vercel 서버리스 환경 DOM 폴리필
+      if (typeof globalThis.DOMMatrix === 'undefined') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (globalThis as any).DOMMatrix = class DOMMatrix { constructor(_?: string | number[]) {} };
+      }
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const pdfParse = require('pdf-parse');
+      const pdfParse = require('pdf-parse/lib/pdf-parse');
       const data = await pdfParse(buffer);
       text = data.text;
     } else {
