@@ -5,9 +5,15 @@ on:
     branches:
       - main
 
+permissions:
+  deployments: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: Production
+      url: https://contract-analyzer-rho.vercel.app
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
