@@ -7,6 +7,11 @@ interface Message {
   content: string;
 }
 
+interface ContractFile {
+  text: string;
+  fileName: string;
+}
+
 const QUICK_QUESTIONS = [
   '전체 계약서를 요약해줘',
   '가장 위험한 조항은 뭐야?',
@@ -37,7 +42,6 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
 }
 
-// 브라우저 TTS 폴백 (Claude provider용)
 function browserSpeak(text: string, onEnd: () => void) {
   if (!('speechSynthesis' in window)) { onEnd(); return; }
   window.speechSynthesis.cancel();
@@ -54,7 +58,7 @@ function browserSpeak(text: string, onEnd: () => void) {
 }
 
 function useTTS(apiKey: string, provider: string) {
-  const [speakingIdx, setSpeakingIdx] = useState<number | null>(null);
+  const [speakingIdx, setSpeakingIdx] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const stop = useCallback(() => {
@@ -67,27 +71,21 @@ function useTTS(apiKey: string, provider: string) {
     setSpeakingIdx(null);
   }, []);
 
-  const speak = useCallback(async (text: string, idx: number) => {
-    // 같은 버튼 재클릭 → 중단
+  const speak = useCallback(async (text: string, idx: string) => {
     if (speakingIdx === idx) { stop(); return; }
     stop();
     setSpeakingIdx(idx);
-
     try {
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: stripHtml(text), apiKey, provider }),
       });
-
-      // Claude provider → 브라우저 TTS 폴백
       if (res.ok && (await res.clone().text()) === 'BROWSER_TTS') {
         browserSpeak(text, () => setSpeakingIdx(null));
         return;
       }
-
       if (!res.ok) { setSpeakingIdx(null); return; }
-
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
@@ -109,22 +107,32 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [savedShow, setSavedShow] = useState(false);
 
-  const [contractText, setContractText] = useState('');
-  const [contractFileName, setContractFileName] = useState('');
+  // 다중 파일 지원
+  const [contracts, setContracts] = useState<ContractFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [dragOver, setDragOver] = useState(false);
-  const [showContract, setShowContract] = useState(false); // 원문 패널 표시
+  const [showContractIdx, setShowContractIdx] = useState<number | null>(null);
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const addFileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { speak, stop, speakingIdx } = useTTS(apiKey, provider);
+
+  // 모든 계약서 텍스트를 합쳐서 AI에게 전달
+  const combinedContractText = contracts.length > 0
+    ? contracts.map((c, i) =>
+        contracts.length === 1
+          ? c.text
+          : `=== 문서 ${i + 1}: ${c.fileName} ===\n\n${c.text}`
+      ).join('\n\n')
+    : '';
 
   /* LocalStorage 로드 */
   useEffect(() => {
@@ -134,12 +142,10 @@ export default function Home() {
     if (savedApiKey) setApiKey(savedApiKey);
   }, []);
 
-  /* 자동 스크롤 */
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  /* 스트리밍 끝나면 TTS 중지 */
   useEffect(() => {
     if (streaming) stop();
   }, [streaming, stop]);
@@ -159,29 +165,49 @@ export default function Home() {
 
   const handleApiKeyBlur = () => saveSettings(provider, apiKey);
 
-  /* 파일 업로드 */
-  const handleFileUpload = async (file: File) => {
+  /* 파일 하나 업로드 처리 */
+  const processFile = async (file: File): Promise<ContractFile | null> => {
     const name = file.name.toLowerCase();
     if (!name.endsWith('.txt') && !name.endsWith('.pdf')) {
+      return null;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch('/api/extract', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '파일 처리 오류');
+    return { text: data.text, fileName: data.fileName };
+  };
+
+  /* 여러 파일 업로드 */
+  const handleFilesUpload = async (files: File[], replace = false) => {
+    const validFiles = Array.from(files).filter(f => {
+      const n = f.name.toLowerCase();
+      return n.endsWith('.txt') || n.endsWith('.pdf');
+    });
+    if (validFiles.length === 0) {
       setUploadError('TXT 또는 PDF 파일만 업로드할 수 있습니다.');
       return;
     }
     setUploading(true);
     setUploadError('');
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await fetch('/api/extract', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (!res.ok) { setUploadError(data.error || '파일 처리 오류'); return; }
-      setContractText(data.text);
-      setContractFileName(data.fileName);
-      setMessages([{
-        role: 'assistant',
-        content: `**${data.fileName}** 파일을 분석했습니다! 📋\n\n계약서 내용을 파악했습니다. 궁금한 점을 자유롭게 질문해보세요.\n\n예를 들어:\n- 어떤 조항이 불공정한가요?\n- 소비자에게 가장 불리한 조항은 무엇인가요?\n- 법적으로 문제될 수 있는 부분이 있나요?`,
-      }]);
-    } catch {
-      setUploadError('서버와의 연결에 실패했습니다.');
+      const results = await Promise.all(validFiles.map(processFile));
+      const successful = results.filter((r): r is ContractFile => r !== null);
+      if (successful.length === 0) {
+        setUploadError('파일 처리에 실패했습니다.');
+        return;
+      }
+      const newContracts = replace ? successful : [...contracts, ...successful];
+      setContracts(newContracts);
+      // 환영 메시지
+      const fileList = newContracts.map((c, i) => `${i + 1}. **${c.fileName}**`).join('\n');
+      const msg = newContracts.length === 1
+        ? `**${newContracts[0].fileName}** 파일을 분석했습니다! 📋\n\n계약서 내용을 파악했습니다. 궁금한 점을 자유롭게 질문해보세요.`
+        : `**${newContracts.length}개 문서**를 모두 분석했습니다! 📋\n\n${fileList}\n\n각 문서의 불공정 조항 비교, 개별 분석 등 질문해보세요.`;
+      setMessages([{ role: 'assistant', content: msg }]);
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : '서버 연결 실패');
     } finally {
       setUploading(false);
     }
@@ -189,26 +215,53 @@ export default function Home() {
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false);
-    const file = e.dataTransfer.files[0];
-    if (file) handleFileUpload(file);
+    if (e.dataTransfer.files.length > 0) {
+      handleFilesUpload(Array.from(e.dataTransfer.files), contracts.length === 0);
+    }
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) handleFileUpload(file);
+    if (e.target.files && e.target.files.length > 0) {
+      handleFilesUpload(Array.from(e.target.files), true);
+      e.target.value = '';
+    }
   };
 
-  const removeContract = () => {
+  const handleAddFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      handleFilesUpload(Array.from(e.target.files), false);
+      e.target.value = '';
+    }
+  };
+
+  // 특정 파일 제거
+  const removeContract = (idx: number) => {
     stop();
-    setContractText(''); setContractFileName('');
-    setMessages([]); setUploadError('');
-    setShowContract(false);
+    const newContracts = contracts.filter((_, i) => i !== idx);
+    setContracts(newContracts);
+    if (showContractIdx === idx) setShowContractIdx(null);
+    if (newContracts.length === 0) {
+      setMessages([]);
+      setUploadError('');
+    } else {
+      const fileList = newContracts.map((c, i) => `${i + 1}. **${c.fileName}**`).join('\n');
+      setMessages([{ role: 'assistant', content: `문서를 제거했습니다. 현재 분석 중인 문서:\n\n${fileList}` }]);
+    }
+  };
+
+  // 전체 초기화
+  const removeAllContracts = () => {
+    stop();
+    setContracts([]);
+    setMessages([]);
+    setUploadError('');
+    setShowContractIdx(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   /* 메시지 전송 */
   const sendMessage = async (text: string) => {
-    if (!text.trim() || streaming || !contractText || !apiKey) return;
+    if (!text.trim() || streaming || !combinedContractText || !apiKey) return;
     stop();
     const userMessage: Message = { role: 'user', content: text };
     const newMessages = [...messages, userMessage];
@@ -221,7 +274,7 @@ export default function Home() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: newMessages, contractText, provider, apiKey }),
+        body: JSON.stringify({ messages: newMessages, contractText: combinedContractText, provider, apiKey }),
       });
       if (!res.ok) {
         const errText = await res.text();
@@ -268,7 +321,7 @@ export default function Home() {
     if (ta) { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`; }
   };
 
-  const isReady = !!contractText && !!apiKey;
+  const isReady = contracts.length > 0 && !!apiKey;
 
   return (
     <div className="chat-app">
@@ -321,7 +374,8 @@ export default function Home() {
 
       {/* ── 파일 업로드 영역 ── */}
       <div className="file-area">
-        {!contractText ? (
+        {contracts.length === 0 ? (
+          /* 업로드 전: 드롭존 */
           <div
             className={`upload-zone${dragOver ? ' dragover' : ''}${uploading ? ' uploading' : ''}`}
             onClick={() => !uploading && fileInputRef.current?.click()}
@@ -341,71 +395,103 @@ export default function Home() {
                   </svg>
                 </div>
                 <p className="upload-main">계약서 파일을 업로드하세요</p>
-                <p className="upload-sub">TXT 또는 PDF · 끌어다 놓거나 클릭</p>
+                <p className="upload-sub">TXT 또는 PDF · 여러 파일 동시 선택 가능 · 끌어다 놓거나 클릭</p>
               </>
             )}
-            <input ref={fileInputRef} type="file" accept=".txt,.pdf" onChange={handleFileSelect} style={{display:'none'}}/>
+            <input ref={fileInputRef} type="file" accept=".txt,.pdf" multiple onChange={handleFileSelect} style={{display:'none'}}/>
           </div>
         ) : (
-          <>
-            <div className="file-badge">
-              <span className="file-badge-icon">
-                {contractFileName.toLowerCase().endsWith('.pdf') ? '📄' : '📝'}
+          /* 업로드 후: 파일 목록 */
+          <div className="file-list-area">
+            <div className="file-list-header">
+              <span className="file-list-title">
+                📁 분석 문서 <span className="file-count-badge">{contracts.length}</span>
               </span>
-              <span className="file-badge-name">{contractFileName}</span>
-              <span className="file-badge-status">✓ 분석 준비 완료</span>
-
-              {/* 원문 보기 토글 버튼 */}
-              <button
-                className={`contract-view-btn${showContract ? ' active' : ''}`}
-                onClick={() => setShowContract(!showContract)}
-                title="계약서 원문 보기"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
-                원문 보기
-              </button>
-
-              {/* 원문 읽기 TTS */}
-              <button
-                className={`contract-view-btn${speakingIdx === -1 ? ' active' : ''}`}
-                onClick={() => speak(contractText, -1)}
-                title="계약서 원문 읽기"
-              >
-                {speakingIdx === -1 ? (
-                  <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13">
-                    <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
-                  </svg>
-                ) : (
+              <div className="file-list-actions">
+                {uploading && <span className="uploading-text">업로드 중...</span>}
+                {/* 파일 추가 버튼 */}
+                <button
+                  className="add-file-btn"
+                  onClick={() => addFileInputRef.current?.click()}
+                  disabled={uploading}
+                  title="문서 추가"
+                >
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
                   </svg>
-                )}
-                {speakingIdx === -1 ? '읽는 중' : '읽기'}
-              </button>
+                  문서 추가
+                </button>
+                {/* 전체 초기화 */}
+                <button className="clear-all-btn" onClick={removeAllContracts} title="전체 제거">
+                  전체 제거
+                </button>
+                <input ref={addFileInputRef} type="file" accept=".txt,.pdf" multiple onChange={handleAddFileSelect} style={{display:'none'}}/>
+              </div>
+            </div>
 
-              <button className="file-badge-remove" onClick={removeContract} title="다른 파일 업로드">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="15" height="15">
-                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
+            {/* 파일 배지 목록 */}
+            <div className="file-badges-list">
+              {contracts.map((c, idx) => (
+                <div key={idx} className="file-badge">
+                  <span className="file-badge-icon">
+                    {c.fileName.toLowerCase().endsWith('.pdf') ? '📄' : '📝'}
+                  </span>
+                  <span className="file-badge-name">{c.fileName}</span>
+                  <span className="file-badge-status">✓</span>
+
+                  {/* 원문 보기 토글 */}
+                  <button
+                    className={`contract-view-btn${showContractIdx === idx ? ' active' : ''}`}
+                    onClick={() => setShowContractIdx(showContractIdx === idx ? null : idx)}
+                    title="원문 보기"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                    원문
+                  </button>
+
+                  {/* TTS */}
+                  <button
+                    className={`contract-view-btn${speakingIdx === `contract-${idx}` ? ' active' : ''}`}
+                    onClick={() => speak(c.text, `contract-${idx}`)}
+                    title="원문 읽기"
+                  >
+                    {speakingIdx === `contract-${idx}` ? (
+                      <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12">
+                        <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="12" height="12">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                      </svg>
+                    )}
+                    {speakingIdx === `contract-${idx}` ? '읽는 중' : '읽기'}
+                  </button>
+
+                  {/* 개별 제거 */}
+                  <button className="file-badge-remove" onClick={() => removeContract(idx)} title="제거">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                  </button>
+                </div>
+              ))}
             </div>
 
             {/* 원문 패널 */}
-            {showContract && (
+            {showContractIdx !== null && contracts[showContractIdx] && (
               <div className="contract-panel">
                 <div className="contract-panel-header">
-                  <span>📋 계약서 원문</span>
-                  <button onClick={() => setShowContract(false)}>✕ 닫기</button>
+                  <span>📋 {contracts[showContractIdx].fileName}</span>
+                  <button onClick={() => setShowContractIdx(null)}>✕ 닫기</button>
                 </div>
-                <pre className="contract-panel-text">{contractText}</pre>
+                <pre className="contract-panel-text">{contracts[showContractIdx].text}</pre>
               </div>
             )}
-          </>
+          </div>
         )}
         {uploadError && <div className="upload-error">⚠️ {uploadError}</div>}
       </div>
@@ -429,11 +515,9 @@ export default function Home() {
 
         {messages.map((msg, i) => (
           <div key={i} className={`message-row ${msg.role}`}>
-            {/* 봇 아바타 */}
             {msg.role === 'assistant' && (
               <div className="message-avatar bot-avatar">⚖️</div>
             )}
-
             <div className={`message-bubble ${msg.role}`}>
               {msg.role === 'assistant' ? (
                 <>
@@ -445,27 +529,24 @@ export default function Home() {
                         : '<span class="typing-dot">●</span><span class="typing-dot">●</span><span class="typing-dot">●</span>',
                     }}
                   />
-                  {/* TTS 버튼 */}
                   {msg.content && !streaming && (
                     <button
-                      className={`tts-btn${speakingIdx === i ? ' tts-active' : ''}`}
-                      onClick={() => speak(msg.content, i)}
-                      title={speakingIdx === i ? '읽기 중단' : '소리로 읽기'}
+                      className={`tts-btn${speakingIdx === `msg-${i}` ? ' tts-active' : ''}`}
+                      onClick={() => speak(msg.content, `msg-${i}`)}
+                      title={speakingIdx === `msg-${i}` ? '읽기 중단' : '소리로 읽기'}
                     >
-                      {speakingIdx === i ? (
-                        /* 정지 아이콘 */
+                      {speakingIdx === `msg-${i}` ? (
                         <svg viewBox="0 0 24 24" fill="currentColor" width="13" height="13">
                           <rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>
                         </svg>
                       ) : (
-                        /* 스피커 아이콘 */
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="13" height="13">
                           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
                           <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
                           <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
                         </svg>
                       )}
-                      {speakingIdx === i ? '읽는 중' : '읽기'}
+                      {speakingIdx === `msg-${i}` ? '읽는 중' : '읽기'}
                     </button>
                   )}
                 </>
@@ -473,8 +554,6 @@ export default function Home() {
                 <div className="message-content">{msg.content}</div>
               )}
             </div>
-
-            {/* 사용자 아바타 */}
             {msg.role === 'user' && (
               <div className="user-avatar">나</div>
             )}
@@ -484,8 +563,13 @@ export default function Home() {
       </div>
 
       {/* ── 빠른 질문 ── */}
-      {contractText && messages.length > 0 && !streaming && (
+      {contracts.length > 0 && messages.length > 0 && !streaming && (
         <div className="quick-questions">
+          {contracts.length >= 2 && (
+            <button className="quick-btn" onClick={() => sendMessage('두 문서의 불공정 조항을 비교해줘')} disabled={!isReady}>
+              문서 비교 분석
+            </button>
+          )}
           {QUICK_QUESTIONS.map((q) => (
             <button key={q} className="quick-btn" onClick={() => sendMessage(q)} disabled={!isReady}>
               {q}
@@ -502,7 +586,7 @@ export default function Home() {
             <button onClick={() => setShowSettings(true)}>설정 열기</button>
           </div>
         )}
-        {!contractText && apiKey && (
+        {contracts.length === 0 && apiKey && (
           <div className="input-warning">계약서 파일을 먼저 업로드해주세요</div>
         )}
         <div className={`input-row${!isReady ? ' disabled' : ''}`}>
@@ -511,7 +595,8 @@ export default function Home() {
             className="chat-textarea"
             placeholder={
               !apiKey ? 'API 키를 먼저 입력해주세요'
-              : !contractText ? '계약서를 먼저 업로드해주세요'
+              : contracts.length === 0 ? '계약서를 먼저 업로드해주세요'
+              : contracts.length >= 2 ? `${contracts.length}개 문서에 대해 질문하세요... (Enter 전송 / Shift+Enter 줄바꿈)`
               : '계약서에 대해 질문하세요... (Enter 전송 / Shift+Enter 줄바꿈)'
             }
             value={input}
@@ -520,7 +605,6 @@ export default function Home() {
             disabled={!isReady || streaming}
             rows={1}
           />
-          {/* 전송 버튼 */}
           <button
             className="send-btn"
             onClick={handleSend}
