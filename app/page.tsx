@@ -101,6 +101,9 @@ function useTTS(apiKey: string, provider: string) {
   return { speak, stop, speakingIdx };
 }
 
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? '1.0.0';
+const BUILD_DATE  = process.env.NEXT_PUBLIC_BUILD_DATE ?? '';
+
 export default function Home() {
   const [provider, setProvider] = useState('openai');
   const [apiKey, setApiKey] = useState('');
@@ -330,7 +333,10 @@ export default function Home() {
         <div className="header-left">
           <div className="header-logo">⚖️</div>
           <div>
-            <h1 className="header-title">공정거래위원회 계약서 분석 챗봇</h1>
+            <h1 className="header-title">
+              공정거래위원회 계약서 분석 챗봇
+              <span className="version-badge">v{APP_VERSION}</span>
+            </h1>
             <p className="header-subtitle">약관법·전자상거래법 기반 불공정 조항 AI 분석</p>
           </div>
         </div>
@@ -577,6 +583,28 @@ export default function Home() {
           ))}
         </div>
       )}
+
+      {/* ── 버전/배포 정보 푸터 ── */}
+      <footer className="app-footer">
+        <span>공정거래위원회 계약서 분석 챗봇</span>
+        <span className="footer-sep">·</span>
+        <span>v{APP_VERSION}</span>
+        {BUILD_DATE && (
+          <>
+            <span className="footer-sep">·</span>
+            <span>빌드 {BUILD_DATE}</span>
+          </>
+        )}
+        <span className="footer-sep">·</span>
+        <a
+          href="https://github.com/sdw1621/contract-analyzer"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="footer-link"
+        >
+          GitHub
+        </a>
+      </footer>
 
       {/* ── 입력 영역 ── */}
       <div className="chat-input-area">

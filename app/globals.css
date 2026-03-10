@@ -117,6 +117,51 @@ html, body {
   color: #ffffff;
   white-space: nowrap;
   letter-spacing: -0.2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 버전 배지 */
+.version-badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.85);
+  border: 1px solid rgba(255,255,255,0.25);
+  padding: 2px 7px;
+  border-radius: 99px;
+  letter-spacing: 0.2px;
+  flex-shrink: 0;
+}
+
+/* 앱 푸터 */
+.app-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 6px 24px;
+  background: var(--bg);
+  border-top: 1px solid var(--border-light);
+  font-size: 11px;
+  color: var(--text-light);
+  flex-shrink: 0;
+}
+
+.footer-sep {
+  margin: 0 6px;
+  opacity: 0.5;
+}
+
+.footer-link {
+  color: var(--gov-blue);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.footer-link:hover {
+  text-decoration: underline;
 }
 
 .header-subtitle {
